@@ -1,0 +1,494 @@
+---
+title: 'Predictive Modeling Assignment #8'
+author: "Ryan Canfield"
+date: "2023-12-15"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(caret)
+library(MASS)
+library(crayon) # Used for changing the print text.
+library(glmnet) # Used for the ridge regression function.
+library(pls) # Used for the PCR function.
+library(class)
+
+library(gbm)
+library(tree)
+library(randomForest)
+library(tidyverse)
+library(BART)
+
+```
+
+### R Markdown
+### Module 08: Assignment 01 - Final Project
+### Due: Fri Dec 15, 2023 11:59pmDue: Fri Dec 15, 2023 11:59pm
+
+### Instructions
+
+## The final project assignment requires students to select a data science topic of interest, propose a research question that may be answered using predictive modeling methods, locate a suitable data file related to the data science topic and research question, analyze the data file using appropriate statistical methods and computational procedures and prepare a report summarizing your findings and documenting the procedures used. Students are strongly encouraged to begin plans for this project early in the course and discuss topics of interest with the instructor and employers.
+
+# Opening the dataset and getting some different previews of the data.
+```{r}
+heart <- read.csv("../Datasets/heart.csv")
+head(heart)
+
+```
+
+
+About this dataset
+Age      : Age of the patient
+Sex      : Sex of the patient
+exang    : exercise induced angina (1 = yes; 0 = no)
+ca       : number of major vessels (0-3)
+cp       : Chest Pain type chest pain type
+         Value 1: typical angina
+         Value 2: atypical angina
+         Value 3: non-anginal pain
+         Value 4: asymptomatic
+      
+trtbps   : resting blood pressure (in mm Hg)
+chol     : cholestoral in mg/dl fetched via BMI sensor
+fbs      : (fasting blood sugar > 120 mg/dl) (1 = true; 0 = false)
+rest_ecg : resting electrocardiographic results
+         Value 0: normal
+         Value 1: having ST-T wave abnormality (T wave inversions and/or ST elevation or depression of > 0.05 mV)
+         Value 2: showing probable or definite left ventricular hypertrophy by Estes' criteria
+thalach  : maximum heart rate achieved
+target   : 0 = less chance of heart attack 1= more chance of heart attack
+
+# Exploratory data analysis 
+```{r}
+summary(heart)
+cat("\n")
+glimpse(heart)
+
+```
+```{r}
+# Correlation matrix 
+pairs(heart)
+
+# Looking at different histograms to get a better idea of the data
+par(mfrow = c(2,3))
+hist(heart$age, xlab = "Age of patients", main = "Age Distribution")
+hist(heart$sex, col = 4, breaks = 20, xlab = "Sex of patients", main = "Sex Distribution")
+hist(heart$chol, col = 3, xlab = "Cholestoral Levels", main = "Cholestoral Distribution")
+hist(heart$restecg, col = 2, breaks = 10, xlab = "Heart Rate Group", main = "Resting Electrocardiographic Results")
+hist(heart$trtbps, col = 5, xlab = "Blood Pressure", main = "Resting Blood Pressure Levels")
+hist(heart$thalach , col = 6, breaks = 8, xlab = "Heart Rate", main = "Maximum Heart Rate")
+
+```
+
+## Preprocessing
+```{r}
+# count total missing values 
+print("Count of total missing values - ") 
+sum(is.na(heart))
+
+```
+
+### Objective 1 (Quantitative Response Variable): To identify and quantify the factors that contribute to variations in cholesterol levels.
+
+## First Model: Multiple Regression -- Best Subset Selection
+```{r}
+# Preliminary linear regression model to see what variables are statsitcally significiant.
+first_Model <- lm(chol ~ ., data = heart)
+summary.lm(first_Model)
+
+# Taking the significant variables to produce the find BSS  multiple linear regression model.
+first_Model_Final <- lm(chol ~ age + sex + restecg, data = heart)
+summary.lm(first_Model_Final)
+
+```
+```{r}
+#Plotting the model.
+model1 <- ggplot(data = heart, aes(x = trtbps, y = chol)) + 
+  geom_point () +                             
+  labs(title = "Heart Rate -v- Cholesterol ",    
+       subtitle = "For 303 heart attack patients",  
+       x = "Heart rate in bpm",                                 
+       y = "Cholesterol Level",                              
+       caption = "[source: data from Kaggle]") + 
+  geom_smooth(method = "lm", se = 0, colour = "#28B463")            
+model1
+
+```
+
+
+
+## Second Model: Forward Stepwise Regression. 
+```{r}
+# To run stepwise regression:
+# First, defining the null model. We need this for forward stepwise regression:
+second_Model_Intercept_Only <- lm(chol ~ 1, data = heart)
+
+# Next, have a model with all explanatory variables included.
+second_Model_All_Variables <- lm(chol ~ ., data = heart)
+# The "." is a symbol that lets us include all the variables.
+
+# Perform forward stepwise regression here, using the step function.
+# We start from the intercept_only model and try every combonation. 
+# We tell "step" the direction of stepwise regression we want. . 
+second_Model <- step(second_Model_Intercept_Only, direction = 'forward', scope = formula(second_Model_All_Variables), trace = 0)
+
+# If we want to see the output of the forward stepwise regression, we can use this command:
+second_Model$anova
+
+# This gets us our coefficients for the model.
+second_Model$coefficients
+
+```
+
+```{r}
+# Adding the variables above to find the best linear model.
+second_Model_Final <- lm(chol ~ age + sex + restecg + thall, data = heart)
+summary.lm(second_Model_Final)
+
+```
+```{r}
+#Plotting the model.
+model2 <- ggplot(data = heart, aes(x = thall , y = chol)) + 
+  geom_point () +                             
+  labs(title = "Comparison of Age -v- Cholesterol ",    
+       subtitle = "For 303 heart attack patients",  
+       x = "Age in years",                                 
+       y = "Cholesterol Level",                              
+       caption = "[source: data from Kaggle]") + 
+  geom_smooth(method = "lm", se = 0, colour = "gold")            
+model2
+
+```
+
+## For future models.
+## Splitting the data into training and testing set.
+```{r}
+# Split the data into training and test set.
+set.seed(310)
+
+# This has all the data 
+training_Samples <- heart$output %>% 
+  createDataPartition(p = 0.8, list = FALSE)
+
+heart_Train_Data  <- heart[training_Samples, ]
+heart_Test_Data <- heart[-training_Samples, ]
+
+# If need here is the split separated by the data and then the target variable.
+heart_TrainX <- heart_Train_Data[c(1:13)]
+heart_Trainy <- heart_Train_Data[c(14)]
+heart_TestX <- heart_Test_Data[c(1:13)] 
+heart_Testy <- heart_Test_Data[c(14)]
+
+```
+
+## Third Model: Ridge Regression
+```{r}
+set.seed(310)
+
+# Setting up variables for Ridge Regression.
+heart_TrainSet_Matrix <- model.matrix(chol ~ ., data = heart_Train_Data)
+heart_TestSet_Matrix <- model.matrix(chol ~ ., data = heart_Test_Data)
+grid <- 10 ^ seq(10, -2, length = 100)
+
+# Fitting the model following the book.
+third_Model_RidgeR.fit <- glmnet(heart_TrainSet_Matrix, heart_Train_Data$chol, alpha = 0, lambda = grid, thresh = 1e-12)
+third_Model_RidgeR.cv <- cv.glmnet(heart_TrainSet_Matrix, heart_Train_Data$chol, alpha = 0, lambda = grid, thresh = 1e-12)
+third_Model_RidgeR.lambda.cv <- third_Model_RidgeR.cv$lambda.min
+
+third_Model_RidgeR.pred <- predict(third_Model_RidgeR.fit, s = third_Model_RidgeR.lambda.cv, newx = heart_TestSet_Matrix)
+print("The MSE on the Ridge Regression's testing set is")
+mean((third_Model_RidgeR.pred - heart_Test_Data$chol)^2)
+
+```
+
+## Fourth Model: Lasso Regression
+```{r}
+set.seed(310)
+
+# Fitting a lasso model on the training set
+fourth_Model_Lasso.fit <- glmnet(heart_TrainSet_Matrix, heart_Train_Data$chol, alpha = 1, lambda = grid, thresh = 1e-12)
+
+# Choosing lambda by crossvalidation
+fourth_Model_Lasso.cv <- cv.glmnet(heart_TrainSet_Matrix, heart_Train_Data$chol, alpha = 1, lambda = grid, thresh = 1e-12)
+fourth_Model_Lasso.lambda.cv <- fourth_Model_Lasso.cv$lambda.min
+
+# Reporting the testing error
+fourth_Model_Lasso.pred <- predict(fourth_Model_Lasso.fit, s = fourth_Model_Lasso.lambda.cv, newx = heart_TestSet_Matrix)
+print("The MSE on the Lasso Model's testing set is")
+mean((fourth_Model_Lasso.pred - heart_Test_Data$chol)^2)
+
+# Finding the Lasso's coefficients
+fourth_Model_Lasso.coef <- predict(fourth_Model_Lasso.fit, s = fourth_Model_Lasso.lambda.cv, type = "coefficients")
+print("The Lasso coefficients are:")
+round(fourth_Model_Lasso.coef, 3)
+
+```
+
+## Fifth Model: Partial Least Squares
+```{r}
+# Fitting the PLS model on the training set and looking at which M to choose.
+set.seed(310)
+fifth_Model_PLS.fit <- plsr(chol ~ ., data = heart_Train_Data , scale = TRUE, validation = "CV")
+summary(fifth_Model_PLS.fit)
+
+```
+
+```{r}
+# Finding out where dimensional stops being reduced used for ncomp below.
+validationplot(fifth_Model_PLS.fit, val.type = "MSEP")
+
+```
+
+```{r}
+# Finding the PLR testing error.
+fifth_Model_PLS.pred <- predict(fifth_Model_PLS.fit, heart_Test_Data, ncomp = 2)
+print("The MSE on the PLS Model's testing set is")
+mean((fifth_Model_PLS.pred - heart_Test_Data$chol)^2)
+
+```
+
+
+## Sixth Model: Regression Trees
+```{r}
+# Fitting the regression trees.
+sixth_Model_Reg.Tree.Model <- tree(chol ~ ., heart_Train_Data)
+
+# Plotting the regression trees.
+plot(sixth_Model_Reg.Tree.Model)
+text(sixth_Model_Reg.Tree.Model, pretty = 0, cex = 0.65)
+
+# Summarizing the results.
+summary(sixth_Model_Reg.Tree.Model)
+
+# Getting the test MSE 
+sixth_Model_Test.Pred <- predict(sixth_Model_Reg.Tree.Model, heart_Test_Data)
+mean((sixth_Model_Test.Pred - heart_Test_Data$chol)^2)
+
+# Getting the train MSE.
+sixth_Model_Train.Pred <- mean(heart_Train_Data$chol)
+mean((sixth_Model_Train.Pred - heart_Test_Data$chol)^2)
+
+```
+
+```{r}
+# Using cross-validation in order to determine the optimal level of tree complexity and seeing if it helped improve the MSE.
+sixth_Model_.CV.Reg.Tree.Model <- cv.tree(sixth_Model_Reg.Tree.Model)
+plot(sixth_Model_.CV.Reg.Tree.Model$size , sixth_Model_.CV.Reg.Tree.Model$dev, type = "b")
+
+sixth_Model_Pruned.Tree.Model <- prune.tree(sixth_Model_Reg.Tree.Model, best = 3)
+
+sixth_Model_Test.Pred <- predict(sixth_Model_Pruned.Tree.Model, heart_Test_Data)
+mean((sixth_Model_Test.Pred - heart_Test_Data$chol)^2)
+
+```
+
+## Seventh Model: Bagging
+```{r}
+set.seed(310)
+
+#Creating the bagging model.
+Seventh_Model_Bagged.Trees.Model <- randomForest(y = heart_Train_Data$chol, x = heart_Train_Data[ , -5],
+                                                 mtry = ncol(heart_Train_Data) - 5, importance = T) 
+# Looking at the preformance of the model.
+Seventh_Model_Test.Pred <- predict(Seventh_Model_Bagged.Trees.Model, heart_Test_Data)
+mean((Seventh_Model_Test.Pred - heart_Test_Data$chol)^2)
+
+
+# Getting the node purity here.
+importance(Seventh_Model_Bagged.Trees.Model) %>%
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  arrange(desc(IncNodePurity))
+
+```
+
+## Eighth Model Random Forests
+```{r}
+set.seed(310)
+eighth_Model_RF.High <- randomForest(chol ~ ., data = heart_Train_Data, mtry = 3, importance = TRUE)
+
+eigth_Model_Yhat.RF <- predict(eighth_Model_RF.High, heart_Test_Data)
+mean((eigth_Model_Yhat.RF - heart_Test_Data$chol)^2)
+
+importance(eighth_Model_RF.High)
+varImpPlot(eighth_Model_RF.High)
+
+```
+
+## Ninth Model: Boosting
+```{r}
+set.seed(310)
+
+ninth_Model_Lambda.Seq <- 10^seq(-5, 0, 0.1)
+
+ninth_Model_Heart.Train.MSE <- c()
+ninth_Model_Heart.Test.MSE <- c()
+
+for (i in 1:length(ninth_Model_Lambda.Seq)) {
+ 
+ninth_Model_Boost.Heart <- gbm(chol ~ . - chol, data = heart_Train_Data, distribution = "gaussian", n.trees = 1000, interaction.depth = 4, 
+                  shrinkage = ninth_Model_Lambda.Seq[i])
+  
+  ninth_Model_Heart.Train.MSE[i] <- mean((predict(ninth_Model_Boost.Heart, heart_Train_Data, n.trees = 1000) - heart_Train_Data$chol)^2)
+  ninth_Model_Heart.Test.MSE[i] <- mean((predict(ninth_Model_Boost.Heart, heart_Test_Data, n.trees = 1000) - heart_Test_Data$chol)^2)
+ 
+}
+
+summary(ninth_Model_Boost.Heart)
+
+```
+
+
+### Object 2 (Qualitative Response Variable): To see what factors contribute the most to having a more likely of a chance for a heart attack or a less likely of a chance for a heart attack.
+
+## Tenth Model: KNN
+```{r}
+set.seed(310)
+tenth_Train.X = data.frame(heart$cp)
+tenth_Test.X = data.frame(heart$cp)
+heart.output = heart$output
+
+# Creating the modeling.
+tenth_Model_KNN.Model = knn(tenth_Train.X, tenth_Test.X, heart.output, k = 1)
+table(tenth_Model_KNN.Model, heart.output)
+
+```
+
+## 11th Model: Logistic Regression
+```{r}
+# Forward Stepwise Logestic Regression 
+
+# Fit an intercept-only model
+heart_Null_Model <- glm(output ~ 1, data = heart_Train_Data, family = binomial)
+
+# fit a model with everything
+heart_All_Model <- glm(output ~ ., data = heart_Train_Data, family = binomial)
+
+# Forward stepwise selection using AIC with both null and full models
+heart_Final_Model <- stepAIC(heart_Null_Model, scope = list(lower = heart_Null_Model, upper = heart_All_Model), direction = "forward", trace = 0)
+
+# Display the final model summary
+summary(heart_Final_Model)
+
+```
+
+```{r}
+# Obtain predicted probabilities on the testing set
+predicted_probs <- predict(heart_Final_Model, newdata = heart_Test_Data, type = "response")
+
+# Assuming you have the true outcomes for the testing set (test_data$output)
+observed_responses <- as.factor(heart_Test_Data$output)
+
+# Convert predicted probabilities to binary predictions (e.g., using a threshold of 0.5)
+predicted_classes <- as.factor(ifelse(predicted_probs >= 0.5, 1, 0))
+
+# Create and displaying the confusion matrix
+conf_matrix <- confusionMatrix(predicted_classes, observed_responses)
+conf_matrix
+
+```
+
+## 12th Model: LDA
+```{r}
+# Creating the model based on variables from logistic regression
+twelfth_Model_LDA.Model = lda(output ~ cp + oldpeak + caa + sex + thalachh + thall + exng + trtbps + chol, data = heart_Train_Data)
+twelfth_Model_LDA.Model
+
+# Making a confusion matrix to check accuracy.
+twelfth_Model_LDA.Model.Pred = predict(twelfth_Model_LDA.Model, heart_Test_Data)
+table(twelfth_Model_LDA.Model.Pred$class, heart_Test_Data$output)
+
+```
+
+## 13th Model: QDA
+```{r}
+# Creating the model.
+thirteenth_Model_QDA.Model = qda(output ~ cp + oldpeak + caa + sex + thalachh + thall + exng + trtbps + chol, data = heart_Train_Data)
+thirteenth_Model_QDA.Model
+
+# Checking its accuracy.
+thirteenth_Model_QDA.Model.Pred = predict(thirteenth_Model_QDA.Model, heart_Test_Data)
+table(thirteenth_Model_QDA.Model.Pred$class, heart_Test_Data$output)
+
+```
+
+## 14th Model: Classification Trees
+```{r}
+# Creating the model
+fourteenth_Model_Class.Tree <- tree(output ~ .-output, data = heart_Train_Data)
+summary(fourteenth_Model_Class.Tree)
+
+
+# Plotting the tree.
+plot(fourteenth_Model_Class.Tree)
+text(fourteenth_Model_Class.Tree , pretty = 0, cex = 0.65)
+
+# Checking the accuracy with a confusion matrix.
+fourteenth_Model_Class.Tree.Pred <- predict(fourteenth_Model_Class.Tree, heart_Test_Data)
+fourteenth_Model_Class.Tree.Pred <- as.factor(ifelse(fourteenth_Model_Class.Tree.Pred >= 0.5, 1, 0))
+fourteenth_Model_Heart.Test.Data <- as.factor(heart_Test_Data$output)
+table(fourteenth_Model_Class.Tree.Pred, fourteenth_Model_Heart.Test.Data)
+
+```
+
+## 15th Model: Bagging
+```{r}
+set.seed(310)
+
+heart_Train_Data.factor <- as.factor(heart_Train_Data$output)
+heart_Test_Data.factor <- as.factor(heart_Test_Data$output)
+
+#Creating the bagging model.
+fifteenth_Model_Bagging <- randomForest(y = heart_Train_Data.factor, x = heart_Train_Data[ , -14],  ntree = 100, importance = T) 
+
+# Looking at the performance of the model.
+fifteenth_Model_Bagging.Pred <- predict(fifteenth_Model_Bagging, heart_Test_Data)
+table(fifteenth_Model_Bagging.Pred, heart_Test_Data.factor)
+
+```
+
+## 16th Model: Random Forests
+```{r}
+set.seed(310)
+
+
+
+sixteenth_Model.Random.Forests.Train  <- randomForest(heart_Train_Data.factor ~ cp + oldpeak + caa + sex + thalachh + thall + exng + trtbps + chol,
+                                                      data = heart_Train_Data, ntree = 200, mtry = 3) 
+sixteenth_Model.Random.Forests.Train
+
+sixteenth_Model.Random.Forests.Test  <- randomForest(heart_Test_Data.factor ~ cp + oldpeak + caa + sex + thalachh + thall + exng + trtbps + chol,
+                                                     data = heart_Test_Data, ntree = 200, mtry = 3)
+sixteenth_Model.Random.Forests.Test
+
+```
+
+
+### Objective 3 (Principal Components Regression)
+
+## Final Model: Principal Components Regression
+```{r}
+# Fitting the PCR model on the training set and looking at which M to choose.
+set.seed(310)
+final_Model_PCR.Fit <- pcr(output ~ ., data = heart_Train_Data , scale = TRUE, validation = "CV")
+summary(final_Model_PCR.Fit)
+
+# Finding out where dimensional stops being reduced used for ncomp below.
+validationplot(final_Model_PCR.Fit, val.type = "MSEP")
+
+# Finding the PCR testing error.
+final_Model_PCR.Pred <- predict(final_Model_PCR.Fit, heart_Test_Data, ncomp = 4)
+print("The MSE on the PCR Model's testing set is")
+mean((final_Model_PCR.Pred - heart_Test_Data$output)^2)
+
+```
+```{r}
+heart_Train_Data2 <- heart_Train_Data[c(-14)]
+pca_result <- prcomp(heart_Train_Data2, center = TRUE, scale. = TRUE)
+pca_result
+```
+
+
